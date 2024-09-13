@@ -1,7 +1,10 @@
 import express, { Request, Response } from "express";
-import { body, validationResult } from "express-validator";
-import { RequestValidationError } from "../errors/request-validation-error";
-import { DatabaseConnectionError } from "../errors/database-connection-error";
+import { body } from "express-validator";
+import bcrypt from "bcrypt";
+import { User } from "../models/user";
+import { BadRequestError } from "../errors/bad-request-error";
+import jwt from "jsonwebtoken";
+import { validateRequest } from "../middlewares/validate-request";
 
 const router = express.Router();
 
@@ -14,20 +17,30 @@ router.post(
       .isLength({ min: 8 })
       .withMessage("Password must be at least 8 characters long"),
   ],
-  (req: Request, res: Response) => {
-    const errors = validationResult(req);
-
-    if (!errors.isEmpty()) {
-      //   return res.status(400).send(errors.array());
-      throw new RequestValidationError(errors.array());
-    }
-
-    console.log("Creating a user.......");
-    throw new DatabaseConnectionError();
-
+  validateRequest,
+  async (req: Request, res: Response) => {
     const { email, password } = req.body;
+    const existingUser = await User.findOne({ email });
 
-    res.sendStatus(204);
+    if (existingUser) throw new BadRequestError("Email is already used");
+
+    const hashed = await bcrypt.hash(password, 8);
+
+    const user = User.build({ email, password: hashed });
+    await user.save();
+
+    // generate JWT
+    const userJwt = jwt.sign(
+      { id: user.id, email: user.email },
+      process.env.JWT_KEY!
+    );
+
+    // store in session
+    req.session = {
+      jwt: userJwt,
+    };
+
+    res.status(201).send(user);
   }
 );
 
